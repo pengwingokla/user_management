@@ -40,6 +40,65 @@ from app.models.user_model import User
 router = APIRouter()
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="login")
 settings = get_settings()
+
+@router.patch("/users/me", response_model=UserResponse)
+async def update_me(
+        user_update: UserUpdate,
+        request: Request,
+        db: AsyncSession = Depends(get_db),
+        current_user: User = Depends(get_current_user),
+    ):
+
+    update_data = user_update.model_dump(exclude_unset=True)
+
+    # Block sensitive fields
+    restricted_fields = {
+        "is_professional", "role", "email_verified",
+        "verification_token", "failed_login_attempts",
+        "last_login_at", "professional_status_updated_at"
+    }
+    for field in restricted_fields:
+        update_data.pop(field, None)
+
+    # If current_user is a dict (from token), fetch full User object from DB
+    if isinstance(current_user, dict):
+        from app.models.user_model import User  # make sure it's imported
+        user_id = current_user.get("user_id")
+        result = await db.get(User, user_id)
+        if not result:
+            raise HTTPException(status_code=404, detail="User not found")
+        current_user = result
+
+    # Now we can safely use setattr
+    for field, value in update_data.items():
+        setattr(current_user, field, value)
+
+    await db.commit()
+    await db.refresh(current_user)
+
+    return UserResponse.model_construct(
+        id=current_user.id,
+        nickname=current_user.nickname,
+        first_name=current_user.first_name,
+        last_name=current_user.last_name,
+        bio=current_user.bio,
+        profile_picture_url=current_user.profile_picture_url,
+        github_profile_url=current_user.github_profile_url,
+        linkedin_profile_url=current_user.linkedin_profile_url,
+        role=current_user.role,
+        email=current_user.email,
+        last_login_at=current_user.last_login_at,
+        created_at=current_user.created_at,
+        updated_at=current_user.updated_at,
+        links=create_user_links(current_user.id, request)
+    )
+
+
+async def require_admin_user(current_user: User = Depends(get_current_user)):
+    if current_user.role != "ADMIN":
+        raise HTTPException(status_code=403, detail="Admin privileges required")
+    return current_user
+
 @router.get("/users/{user_id}", response_model=UserResponse, name="get_user", tags=["User Management Requires (Admin or Manager Roles)"])
 async def get_user(user_id: UUID, request: Request, db: AsyncSession = Depends(get_db), token: str = Depends(oauth2_scheme), current_user: dict = Depends(require_role(["ADMIN", "MANAGER"]))):
     """
@@ -205,20 +264,24 @@ async def register(user_data: UserCreate, session: AsyncSession = Depends(get_db
 
 @router.post("/login/", response_model=TokenResponse, tags=["Login and Registration"])
 async def login(form_data: OAuth2PasswordRequestForm = Depends(), session: AsyncSession = Depends(get_db)):
-    if await UserService.is_account_locked(session, form_data.username):
-        raise HTTPException(status_code=400, detail="Account locked due to too many failed login attempts.")
+    try:
+        if await UserService.is_account_locked(session, form_data.username):
+            raise HTTPException(status_code=400, detail="Account locked due to too many failed login attempts.")
 
-    user = await UserService.login_user(session, form_data.username, form_data.password)
-    if user:
-        access_token_expires = timedelta(minutes=settings.access_token_expire_minutes)
+        user = await UserService.login_user(session, form_data.username, form_data.password)
+        if user:
+            access_token_expires = timedelta(minutes=settings.access_token_expire_minutes)
 
-        access_token = create_access_token(
-            data={"sub": user.email, "role": str(user.role.name)},
-            expires_delta=access_token_expires
-        )
+            access_token = create_access_token(
+                data={"sub": user.email, "role": str(user.role.name)},
+                expires_delta=access_token_expires
+            )
 
-        return {"access_token": access_token, "token_type": "bearer"}
-    raise HTTPException(status_code=401, detail="Incorrect email or password.")
+            return {"access_token": access_token, "token_type": "bearer"}
+        raise HTTPException(status_code=401, detail="Incorrect email or password.")
+    except Exception as e:
+        print("🔥 Login error:", repr(e))  # TEMPORARY
+        raise
 
 @router.post("/login/", include_in_schema=False, response_model=TokenResponse, tags=["Login and Registration"])
 async def login(form_data: OAuth2PasswordRequestForm = Depends(), session: AsyncSession = Depends(get_db)):
@@ -249,35 +312,6 @@ async def verify_email(user_id: UUID, token: str, db: AsyncSession = Depends(get
     if await UserService.verify_email_with_token(db, user_id, token):
         return {"message": "Email verified successfully"}
     raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid or expired verification token")
-
-@router.patch("/users/me", response_model=UserResponse)
-async def update_me(
-    user_update: UserUpdate,
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user)
-):
-    update_data = user_update.dict(exclude_unset=True)
-
-    # Block sensitive fields before setting
-    restricted_fields = {
-        "is_professional", "role", "email_verified",
-        "verification_token", "failed_login_attempts",
-        "last_login_at", "professional_status_updated_at"
-    }
-    for field in restricted_fields:
-        update_data.pop(field, None)
-
-    for field, value in update_data.items():
-        setattr(current_user, field, value)
-
-    await db.commit()
-    await db.refresh(current_user)
-    return current_user
-
-async def require_admin_user(current_user: User = Depends(get_current_user)):
-    if current_user.role != "ADMIN":
-        raise HTTPException(status_code=403, detail="Admin privileges required")
-    return current_user
 
 @router.post("/users/{user_id}/upgrade", response_model=UserResponse, tags=["User Management Requires (Admin or Manager Roles)"])
 async def upgrade_user_to_pro(
