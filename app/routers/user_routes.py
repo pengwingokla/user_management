@@ -24,6 +24,8 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Response, status, Request
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select
+from datetime import datetime
 from app.dependencies import get_current_user, get_db, get_email_service, require_role
 from app.schemas.pagination_schema import EnhancedPagination
 from app.schemas.token_schema import TokenResponse
@@ -258,3 +260,45 @@ async def update_me(user_update: UserUpdate, db: AsyncSession = Depends(get_db),
     await db.commit()
     await db.refresh(current_user)
     return current_user
+
+async def require_admin_user(current_user: User = Depends(get_current_user)):
+    if current_user.role != "ADMIN":
+        raise HTTPException(status_code=403, detail="Admin privileges required")
+    return current_user
+
+@router.post("/users/{user_id}/upgrade", response_model=UserResponse, tags=["User Management Requires (Admin or Manager Roles)"])
+async def upgrade_user_to_pro(
+    user_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_admin_user),  # Ensure this only allows ADMINs
+    request: Request = None
+):
+    result = await db.execute(select(User).where(User.id == user_id))
+    user = result.scalar_one_or_none()
+
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    user.is_professional = True
+    user.professional_status_updated_at = datetime.utcnow()
+
+    await db.commit()
+    await db.refresh(user)
+
+    return UserResponse.model_construct(
+        id=user.id,
+        nickname=user.nickname,
+        first_name=user.first_name,
+        last_name=user.last_name,
+        bio=user.bio,
+        profile_picture_url=user.profile_picture_url,
+        github_profile_url=user.github_profile_url,
+        linkedin_profile_url=user.linkedin_profile_url,
+        role=user.role,
+        email=user.email,
+        last_login_at=user.last_login_at,
+        created_at=user.created_at,
+        updated_at=user.updated_at,
+        is_professional=user.is_professional,
+        links=create_user_links(user.id, request)
+    )
