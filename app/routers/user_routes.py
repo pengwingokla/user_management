@@ -251,8 +251,21 @@ async def verify_email(user_id: UUID, token: str, db: AsyncSession = Depends(get
     raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid or expired verification token")
 
 @router.patch("/users/me", response_model=UserResponse)
-async def update_me(user_update: UserUpdate, db: AsyncSession = Depends(get_db), current_user: User = Depends(get_current_user)):
+async def update_me(
+    user_update: UserUpdate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
     update_data = user_update.dict(exclude_unset=True)
+
+    # Block sensitive fields before setting
+    restricted_fields = {
+        "is_professional", "role", "email_verified",
+        "verification_token", "failed_login_attempts",
+        "last_login_at", "professional_status_updated_at"
+    }
+    for field in restricted_fields:
+        update_data.pop(field, None)
 
     for field, value in update_data.items():
         setattr(current_user, field, value)
