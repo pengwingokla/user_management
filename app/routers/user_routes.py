@@ -271,7 +271,8 @@ async def upgrade_user_to_pro(
     user_id: UUID,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_admin_user),  # Ensure this only allows ADMINs
-    request: Request = None
+    request: Request = None,
+    email_service: EmailService = Depends(get_email_service),
 ):
     result = await db.execute(select(User).where(User.id == user_id))
     user = result.scalar_one_or_none()
@@ -284,6 +285,13 @@ async def upgrade_user_to_pro(
 
     await db.commit()
     await db.refresh(user)
+
+    # Send confirmation email
+    await email_service.send_email(
+        to_email=user.email,
+        subject="You're now a professional!",
+        body=f"Hi {user.first_name},\n\nCongratulations! Your profile has been upgraded to professional status."
+    )
 
     return UserResponse.model_construct(
         id=user.id,
