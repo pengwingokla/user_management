@@ -33,6 +33,8 @@ from app.services.jwt_service import create_access_token
 from app.utils.link_generation import create_user_links, generate_pagination_links
 from app.dependencies import get_settings
 from app.services.email_service import EmailService
+from app.models.user_model import User
+
 router = APIRouter()
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="login")
 settings = get_settings()
@@ -245,3 +247,14 @@ async def verify_email(user_id: UUID, token: str, db: AsyncSession = Depends(get
     if await UserService.verify_email_with_token(db, user_id, token):
         return {"message": "Email verified successfully"}
     raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid or expired verification token")
+
+@router.patch("/users/me", response_model=UserResponse)
+async def update_me(user_update: UserUpdate, db: AsyncSession = Depends(get_db), current_user: User = Depends(get_current_user)):
+    update_data = user_update.dict(exclude_unset=True)
+
+    for field, value in update_data.items():
+        setattr(current_user, field, value)
+
+    await db.commit()
+    await db.refresh(current_user)
+    return current_user
