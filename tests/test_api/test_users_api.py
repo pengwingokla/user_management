@@ -190,3 +190,24 @@ async def test_list_users_unauthorized(async_client, user_token):
         headers={"Authorization": f"Bearer {user_token}"}
     )
     assert response.status_code == 403  # Forbidden, as expected for regular user
+
+def test_user_cannot_update_restricted_fields(client, regular_user_token):
+    # Try to update restricted fields manually via PATCH /users/me
+    res = client.patch(
+        "/users/me",
+        headers={"Authorization": f"Bearer {regular_user_token}"},
+        json={
+            "nickname": "safe_update",
+            "role": "ADMIN",
+            "is_professional": True
+        }
+    )
+    assert res.status_code == 200
+    data = res.json()
+
+    # Confirm safe field was updated
+    assert data["nickname"] == "safe_update"
+
+    # Confirm restricted fields were NOT changed
+    assert data.get("role") != "ADMIN"
+    assert data.get("is_professional") is not True

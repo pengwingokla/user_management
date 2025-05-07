@@ -238,3 +238,14 @@ def email_service():
         mock_service.send_verification_email.return_value = None
         mock_service.send_user_email.return_value = None
         return mock_service
+
+@pytest.fixture(scope="function")
+def client(db_session):
+    app.dependency_overrides[get_db] = lambda: db_session
+    with TestClient(app) as client:
+        yield client
+    app.dependency_overrides.clear()
+
+@pytest.fixture
+def regular_user_token(user_token):
+    return user_token
